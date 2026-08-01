@@ -1,0 +1,13 @@
+{
+  "name": "dandan-wrongbook",
+  "version": "1.0.0",
+  "description": "蛋蛋错题本 —— 零依赖离线可用的错题本 PWA",
+  "private": true,
+  "scripts": {
+    "test": "node tests/backup.test.js"
+  },
+  "devDependencies": {
+    "jsdom": "^24.0.0"
+  },
+  "license": "MIT"
+}
