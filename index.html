@@ -255,6 +255,11 @@
         <button class="btn soft block bk-btn" id="bkChangeLoginPw">🔑 修改登录密码</button>
         <button class="btn soft block bk-btn" id="bkChangePw">🔒 修改操作密码</button>
       </div>
+      <div class="settings-card">
+        <h3 class="settings-sec">🔄 应用更新</h3>
+        <p class="backup-tip">当前版本 <span id="verLabel">—</span>。联网可检查更新，更新不会动你的本地错题记录。</p>
+        <button class="btn soft block bk-btn" id="bkCheckUpdate">检查更新</button>
+      </div>
       <input type="file" id="importInput" accept=".json,application/json" style="display:none">
     </main>
   </div>
@@ -294,6 +299,9 @@
   var REVIEW_SCHEDULE = [1,2,4,7,15,30,60]; // 天
   var SUBJECTS = ["语文","数学","英语","物理","化学","生物","历史","地理","政治","其他"];
   var DIFFS = [1,2,3,4,5];
+  var APP_VERSION = "2026.08.01.1";
+  // 仅用于"检查更新"时静默请求新版本，绝不出现在界面上（满足：离线界面不含在线网址）
+  var UPDATE_BASE = "https://remi888abg.github.io/dandan-wrongbook/";
 
   var state = { items:[], filter:{ tab:"all", q:"", subject:"", tag:"" } };
 
@@ -549,7 +557,9 @@
       '<div class="field"><label>标签（逗号分隔）</label><input type="text" id="fTags" value="'+esc((it.tags||[]).join(","))+'" placeholder="如：计算错误,函数"></div>'+
       '<div class="field"><label>题目图片（拍照 / 相册）</label>'+
         '<button type="button" class="btn soft block" id="btnPick">📷 添加图片</button>'+
-        '<div class="imgs" id="imgList">'+imgHTML+'</div></div>';
+        '<div class="imgs" id="imgList">'+imgHTML+'</div></div>'+
+      '<div class="field"><button type="button" class="btn soft block" id="btnOcr">🔍 识别题目（OCR）</button>'+
+        '<p class="backup-tip" style="margin-top:8px">添加图片后点此，自动识别文字填入题目（需联网；离线会提示无网络）。</p></div>';
 
     // bind subject chips
     document.querySelectorAll("#subChips [data-sub]").forEach(function(b){
@@ -565,6 +575,8 @@
     document.getElementById("imgList").onclick=function(e){
       var d=e.target.getAttribute("data-img"); if(d!==null){ it.images.splice(+d,1); renderEditor(); }
     };
+    var ocrBtn=document.getElementById("btnOcr");
+    if(ocrBtn) ocrBtn.onclick=doOcr;
     setActions("edit");
   }
 
@@ -747,6 +759,112 @@
     clearTimeout(toastTimer); toastTimer=setTimeout(function(){t.classList.remove("show");},1800);
   }
 
+  /* ---------- 网络状态 ---------- */
+  function isOnline(){ return navigator.onLine !== false; }
+
+  /* ---------- OCR：在线识别题目文字，离线提示 ---------- */
+  var _tesseractLoading = null;
+  var _ocrBusy = false;
+  function loadScriptSrc(src){
+    return new Promise(function(res,rej){
+      var s=document.createElement("script"); s.src=src;
+      s.onload=function(){ res(); };
+      s.onerror=function(){ rej(new Error("脚本加载失败: "+src)); };
+      document.head.appendChild(s);
+    });
+  }
+  function ensureTesseract(){
+    if(window.Tesseract) return Promise.resolve(window.Tesseract);
+    if(_tesseractLoading) return _tesseractLoading;
+    _tesseractLoading = loadScriptSrc("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js")
+      .then(function(){ if(!window.Tesseract) throw new Error("Tesseract 未就绪"); return window.Tesseract; });
+    return _tesseractLoading;
+  }
+  function doOcr(){
+    if(_ocrBusy) return;
+    if(!isOnline()){ toast("无网络，无法识别"); return; }
+    var imgs = (editing && editing.images) || [];
+    if(!imgs.length){ toast("请先添加题目图片"); return; }
+    _ocrBusy = true;
+    var btn=document.getElementById("btnOcr");
+    if(btn){ btn.disabled=true; btn.textContent="识别中…"; }
+    ensureTesseract()
+      .then(function(T){
+        return T.createWorker("chi_sim", 1, {
+          logger:function(m){ if(m && m.status==="recognizing text" && btn){ btn.textContent="识别中 "+Math.round((m.progress||0)*100)+"%"; } }
+        });
+      })
+      .then(function(worker){
+        var texts=[];
+        var chain=Promise.resolve();
+        imgs.forEach(function(src){
+          chain = chain.then(function(){ return worker.recognize(src).then(function(o){ texts.push((o&&o.data&&o.data.text)||""); }); });
+        });
+        return chain.then(function(){ return worker.terminate().then(function(){ return texts; }); });
+      })
+      .then(function(texts){
+        var merged=texts.join("\n\n").trim();
+        if(!merged){ toast("未识别到文字，请手动输入"); return; }
+        var q=document.getElementById("fQuestion");
+        q.value = (q.value? q.value+"\n":"") + merged;
+        toast("OCR 完成，已填入题目文字");
+      })
+      .catch(function(err){
+        console.error("OCR 失败:", err);
+        toast("识别失败：无网络或识别引擎加载失败");
+      })
+      .then(function(){
+        _ocrBusy=false;
+        var b=document.getElementById("btnOcr");
+        if(b){ b.disabled=false; b.textContent="🔍 识别题目（OCR）"; }
+      });
+  }
+
+  /* ---------- 检查更新：保留本地记录下连线更新 ---------- */
+  function cmpVer(a,b){
+    var pa=String(a).split("."), pb=String(b).split(".");
+    for(var i=0;i<Math.max(pa.length,pb.length);i++){
+      var x=parseInt(pa[i]||"0",10), y=parseInt(pb[i]||"0",10);
+      if(x>y) return 1; if(x<y) return -1;
+    }
+    return 0;
+  }
+  function checkForUpdate(silent){
+    if(!isOnline()){ if(!silent) toast("无网络，无法检查更新"); return; }
+    // 同源时用相对路径；纯离线文件（file://）时用内置更新地址（仅请求用，不在界面展示）
+    var base = (location.protocol.indexOf("http")===0) ? "" : UPDATE_BASE;
+    fetch(base+"version.json", {cache:"no-store"})
+      .then(function(r){ if(!r.ok) throw new Error("http "+r.status); return r.json(); })
+      .then(function(d){
+        if(d && d.version && cmpVer(d.version, APP_VERSION) > 0){
+          toast("发现新版本 "+d.version+"，正在准备…");
+          return fetch(base+"index.html", {cache:"no-store"})
+            .then(function(r){ return r.text(); })
+            .then(function(html){ showUpdateReady(d.version, html); });
+        } else {
+          if(!silent) toast("已是最新版本 ("+APP_VERSION+")");
+        }
+      })
+      .catch(function(e){ if(!silent) toast("检查更新失败（可能无网络）"); });
+  }
+  function showUpdateReady(ver, html){
+    // 界面绝不展示任何在线网址，仅提示版本与提供更新动作
+    if(location.protocol.indexOf("http")===0){
+      if(confirm("发现新版本 "+ver+"（当前 "+APP_VERSION+"）。\n点击确定立即重启应用以更新；你的本地错题记录会完整保留。")){
+        if(navigator.serviceWorker && navigator.serviceWorker.getRegistration){
+          navigator.serviceWorker.getRegistration().then(function(reg){ if(reg) reg.update(); });
+        }
+        setTimeout(function(){ location.reload(true); }, 400);
+      }
+    } else {
+      var blob=new Blob([html],{type:"text/html"});
+      var a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+      a.download="蛋蛋错题本_"+ver+".html"; a.click();
+      setTimeout(function(){ URL.revokeObjectURL(a.href); }, 1000);
+      toast("已下载新版本 "+ver+"，请用它覆盖旧文件（记录自动保留）");
+    }
+  }
+
   /* ---------- events ---------- */
   function bind(){
     document.getElementById("fabAdd").onclick=function(){ openEditor(null); };
@@ -834,6 +952,7 @@
     document.getElementById("bkChangeLoginPw").onclick=function(){ changePwFor(LOGIN_PW_KEY, "登录密码", checkLoginPw); };
     document.getElementById("bkChangePw").onclick=function(){ changePwFor(OP_PW_KEY, "操作密码", checkOpPw); };
     document.getElementById("bkClearAll").onclick=clearAllData;
+    document.getElementById("bkCheckUpdate").onclick=function(){ checkForUpdate(false); };
     var unlocked=false;
     try{ unlocked = sessionStorage.getItem("cuotiben_unlocked")==="1"; }catch(e){}
     if(!unlocked) showLock();
@@ -872,6 +991,7 @@
 
   /* ---------- init ---------- */
   load(); renderSubjects(); renderStatsStrip(); renderList(); bind(); bindLock(); bindBackGuard();
+  var _vl=document.getElementById("verLabel"); if(_vl) _vl.textContent=APP_VERSION;
 })();
 </script>
 </body>
