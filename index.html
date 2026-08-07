@@ -299,7 +299,7 @@
   var REVIEW_SCHEDULE = [1,2,4,7,15,30,60]; // 天
   var SUBJECTS = ["语文","数学","英语","物理","化学","生物","历史","地理","政治","其他"];
   var DIFFS = [1,2,3,4,5];
-  var APP_VERSION = "2026.08.01.1";
+  var APP_VERSION = "2026.08.01.2";
   // 仅用于"检查更新"时静默请求新版本，绝不出现在界面上（满足：离线界面不含在线网址）
   var UPDATE_BASE = "https://remi888abg.github.io/dandan-wrongbook/";
 
@@ -857,11 +857,18 @@
         setTimeout(function(){ location.reload(true); }, 400);
       }
     } else {
-      var blob=new Blob([html],{type:"text/html"});
-      var a=document.createElement("a"); a.href=URL.createObjectURL(blob);
-      a.download="蛋蛋错题本_"+ver+".html"; a.click();
-      setTimeout(function(){ URL.revokeObjectURL(a.href); }, 1000);
-      toast("已下载新版本 "+ver+"，请用它覆盖旧文件（记录自动保留）");
+      // 离线文件：①下载新版本 HTML；②同时导出当前数据备份，确保换文件/换路径后记录可恢复
+      var htmlBlob=new Blob([html],{type:"text/html"});
+      var ha=document.createElement("a"); ha.href=URL.createObjectURL(htmlBlob);
+      ha.download="蛋蛋错题本_"+ver+".html"; ha.click();
+      setTimeout(function(){ URL.revokeObjectURL(ha.href); }, 1500);
+      setTimeout(function(){
+        var dataBlob=new Blob([JSON.stringify({version:1, items:state.items},null,2)],{type:"application/json"});
+        var da=document.createElement("a"); da.href=URL.createObjectURL(dataBlob);
+        da.download="蛋蛋错题本备份_"+todayStr()+".json"; da.click();
+        setTimeout(function(){ URL.revokeObjectURL(da.href); }, 1500);
+      }, 400);
+      toast("已下载：①新版本HTML ②数据备份JSON。若新文件另存他用，请用App内「导入备份」恢复记录；若覆盖原文件则记录自动保留。");
     }
   }
 
